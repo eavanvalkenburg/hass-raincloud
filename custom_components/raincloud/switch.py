@@ -7,15 +7,15 @@ from homeassistant.components.switch import PLATFORM_SCHEMA, SwitchEntity
 from homeassistant.const import ATTR_ATTRIBUTION, CONF_MONITORED_CONDITIONS
 import homeassistant.helpers.config_validation as cv
 
-from . import (
+from .const import (
     ALLOWED_WATERING_TIME,
     ATTRIBUTION,
     CONF_WATERING_TIME,
-    DATA_RAINCLOUD,
+    DOMAIN,
     DEFAULT_WATERING_TIME,
     SWITCHES,
-    RainCloudEntity,
 )
+from . import RainCloudEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up a sensor for a raincloud device."""
-    raincloud = hass.data[DATA_RAINCLOUD].data
+    raincloud = hass.data[DOMAIN].data
     default_watering_timer = config.get(CONF_WATERING_TIME)
 
     sensors = []

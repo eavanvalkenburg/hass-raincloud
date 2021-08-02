@@ -20,68 +20,29 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.event import track_time_interval
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .const import {
+    ALLOWED_WATERING_TIME,
+    ATTRIBUTION,
+    CONF_WATERING_TIME,
+    NOTIFICATION_ID,
+    NOTIFICATION_TITLE,
+    DOMAIN,
+    DEFAULT_WATERING_TIME,
+    KEY_MAP,
+    ICON_MAP,
+    UNIT_OF_MEASUREMENT_MAP,
+    BINARY_SENSORS,
+    SENSORS,
+    SWITCHES,
+    RAIN_DELAY_DAYS_ATTR,
+    RAIN_DELAY_SERVICE_ATTR,
+    SCAN_INTERVAL,
+    SIGNAL_UPDATE_RAINCLOUD,
+}
 
 _LOGGER = logging.getLogger(__name__)
-
-ALLOWED_WATERING_TIME = [5, 10, 15, 30, 45, 60]
-
-ATTRIBUTION = "Data provided by Melnor Aquatimer.com"
-
-CONF_WATERING_TIME = "watering_minutes"
-
-NOTIFICATION_ID = "raincloud_notification"
-NOTIFICATION_TITLE = "Rain Cloud Setup"
-
-DATA_RAINCLOUD = "raincloud"
-DOMAIN = "raincloud"
-DEFAULT_WATERING_TIME = 15
-
-KEY_MAP = {
-    "auto_watering": "Automatic Watering",
-    "battery": "Battery",
-    "is_watering": "Watering",
-    "manual_watering": "Manual Watering",
-    "next_cycle": "Next Cycle",
-    "rain_delay": "Rain Delay",
-    "status": "Status",
-    "watering_time": "Remaining Watering Time",
-}
-
-ICON_MAP = {
-    "auto_watering": "mdi:autorenew",
-    "battery": "",
-    "is_watering": "",
-    "manual_watering": "mdi:water-pump",
-    "next_cycle": "mdi:calendar-clock",
-    "rain_delay": "mdi:weather-rainy",
-    "status": "",
-    "watering_time": "mdi:water-pump",
-}
-
-UNIT_OF_MEASUREMENT_MAP = {
-    "auto_watering": "",
-    "battery": PERCENTAGE,
-    "is_watering": "",
-    "manual_watering": "",
-    "next_cycle": "",
-    "rain_delay": TIME_DAYS,
-    "status": "",
-    "watering_time": TIME_MINUTES,
-}
-
-BINARY_SENSORS = ["is_watering", "status"]
-
-SENSORS = ["battery", "next_cycle", "rain_delay", "watering_time"]
-
-SWITCHES = ["auto_watering", "manual_watering"]
-
-RAIN_DELAY_SERVICE_ATTR = "rain_delay"
-
-RAIN_DELAY_DAYS_ATTR = 'days'
-
-SCAN_INTERVAL = timedelta(seconds=10)
-
-SIGNAL_UPDATE_RAINCLOUD = "raincloud_update"
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -96,9 +57,12 @@ CONFIG_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+PLATFORMS = ['sensor', 'binary_sensor', 'switch']
 
 def setup(hass, config):
     """Set up the Melnor RainCloud component."""
+
+    hass.data.setdefault(DOMAIN, {})
     conf = config[DOMAIN]
     username = conf.get(CONF_USERNAME)
     password = conf.get(CONF_PASSWORD)
@@ -108,7 +72,6 @@ def setup(hass, config):
         raincloud = RainCloudy(username=username, password=password)
         if not raincloud.is_connected:
             raise HTTPError
-        hass.data[DATA_RAINCLOUD] = RainCloudHub(raincloud)
     except (ConnectTimeout, HTTPError) as ex:
         _LOGGER.error("Unable to connect to Rain Cloud service: %s", str(ex))
         hass.components.persistent_notification.create(
@@ -124,27 +87,37 @@ def setup(hass, config):
 
         days = call.data.get(RAIN_DELAY_DAYS_ATTR, 0)
 
-        for controller in hass.data[DATA_RAINCLOUD].data.controllers:
+        for controller in hass.data[DOMAIN]['raincloud'].controllers:
             for faucet in controller.faucets:
                 for zone in faucet.zones:
                     zone.rain_delay = days
 
-        hass.data[DATA_RAINCLOUD].data.update()
+        hass.data[DOMAIN].data.update()
         dispatcher_send(hass, SIGNAL_UPDATE_RAINCLOUD)
 
         return True
     
     hass.services.register(DOMAIN, RAIN_DELAY_SERVICE_ATTR, handle_rain_delay)
 
-    def hub_refresh(event_time):
+    async def async_hub_refresh():
         """Call Raincloud hub to refresh information."""
         _LOGGER.debug("Updating RainCloud Hub component")
-        hass.data[DATA_RAINCLOUD].data.update()
-        dispatcher_send(hass, SIGNAL_UPDATE_RAINCLOUD)
+        hass.raincloud.update()
+        return raincloud
 
     # Call the Raincloud API to refresh updates
-    track_time_interval(hass, hub_refresh, scan_interval)
+    coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name="raincloud",
+        update_method=hub_refresh,
+        update_interval=scan_interval,
+    )
+    await coordinator.async_config_entry_first_refresh()
+    # track_time_interval(hass, hub_refresh, scan_interval)
 
+    hass.data[DOMAIN][entry.entry_id] = {"raincloud": raincloud, "coordinator": coordinator}
+    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
     return True
 
 

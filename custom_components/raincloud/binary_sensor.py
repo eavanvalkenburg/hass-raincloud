@@ -7,7 +7,8 @@ from homeassistant.components.binary_sensor import PLATFORM_SCHEMA, BinarySensor
 from homeassistant.const import CONF_MONITORED_CONDITIONS
 import homeassistant.helpers.config_validation as cv
 
-from . import BINARY_SENSORS, DATA_RAINCLOUD, ICON_MAP, RainCloudEntity
+from .const import BINARY_SENSORS, DOMAIN, ICON_MAP
+from . import RainCloudEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up a sensor for a raincloud device."""
-    raincloud = hass.data[DATA_RAINCLOUD].data
+    raincloud = hass.data[DOMAIN].data
 
     sensors = []
     for sensor_type in config.get(CONF_MONITORED_CONDITIONS):

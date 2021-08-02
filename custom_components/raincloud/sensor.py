@@ -8,7 +8,8 @@ from homeassistant.const import CONF_MONITORED_CONDITIONS
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.icon import icon_for_battery_level
 
-from . import DATA_RAINCLOUD, ICON_MAP, SENSORS, RainCloudEntity
+from .const import DOMAIN, ICON_MAP, SENSORS
+from . import RainCloudEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up a sensor for a raincloud device."""
-    raincloud = hass.data[DATA_RAINCLOUD].data
+    raincloud = hass.data[DOMAIN].data
 
     sensors = []
     for sensor_type in config.get(CONF_MONITORED_CONDITIONS):
