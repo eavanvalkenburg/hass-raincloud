@@ -1,39 +1,37 @@
 """Support for Melnor RainCloud sprinkler water timer."""
 import logging
 
+from raincloudy.core import RainCloudy
+
 import voluptuous as vol
 
-from homeassistant.components.binary_sensor import PLATFORM_SCHEMA, BinarySensorEntity
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import CONF_MONITORED_CONDITIONS
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import BINARY_SENSORS, DOMAIN, ICON_MAP
 from . import RainCloudEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Optional(CONF_MONITORED_CONDITIONS, default=list(BINARY_SENSORS)): vol.All(
-            cv.ensure_list, [vol.In(BINARY_SENSORS)]
-        )
-    }
-)
-
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up a sensor for a raincloud device."""
-    raincloud = hass.data[DOMAIN].data
+    raincloud: RainCloudy = hass.data[DOMAIN]["raincloud"]
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN]["coordinator"]
 
     sensors = []
-    for sensor_type in config.get(CONF_MONITORED_CONDITIONS):
+    for sensor_type in BINARY_SENSORS:
         if sensor_type == "status":
             for controller in raincloud.controllers:
-                sensors.append(RainCloudBinarySensor(controller, sensor_type))
-                
+                sensors.append(
+                    RainCloudBinarySensor(coordinator, controller, sensor_type)
+                )
+
                 for faucet in controller.faucets:
                     sensors.append(
-                        RainCloudBinarySensor(faucet, sensor_type)
+                        RainCloudBinarySensor(coordinator, faucet, sensor_type)
                     )
 
         else:
@@ -41,7 +39,9 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
             for controller in raincloud.controllers:
                 for faucet in controller.faucets:
                     for zone in faucet.zones:
-                        sensors.append(RainCloudBinarySensor(zone, sensor_type))
+                        sensors.append(
+                            RainCloudBinarySensor(coordinator, zone, sensor_type)
+                        )
 
     add_entities(sensors, True)
     return True
@@ -57,7 +57,7 @@ class RainCloudBinarySensor(RainCloudEntity, BinarySensorEntity):
 
     def update(self):
         """Get the latest data and updates the state."""
-        _LOGGER.debug("Updating RainCloud sensor: %s", self._name)
+        _LOGGER.debug("Updating RainCloud sensor: %s", self._attr_name)
         self._state = getattr(self.data, self._sensor_type)
         if self._sensor_type == "status":
             self._state = self._state == "Online"

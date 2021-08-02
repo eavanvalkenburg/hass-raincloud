@@ -8,6 +8,7 @@ from homeassistant.const import (
     PERCENTAGE,
 )
 
+ALLOWED_WATERING_TIME = [5, 10, 15, 30, 45, 60]
 ATTRIBUTION = "Data provided by Melnor Aquatimer.com"
 
 CONF_WATERING_TIME = "watering_minutes"
@@ -59,7 +60,7 @@ SWITCHES = ["auto_watering", "manual_watering"]
 
 RAIN_DELAY_SERVICE_ATTR = "rain_delay"
 
-RAIN_DELAY_DAYS_ATTR = 'days'
+RAIN_DELAY_DAYS_ATTR = "days"
 
 SCAN_INTERVAL = timedelta(seconds=10)
 
