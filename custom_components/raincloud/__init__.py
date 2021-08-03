@@ -1,167 +1,82 @@
 """Support for Melnor RainCloud sprinkler water timer."""
-from datetime import timedelta
+from __future__ import annotations
+
 import logging
 
-from raincloudy.core import RainCloudy
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from raincloudy.core import RainCloudy, RainCloudyController
 
-from requests.exceptions import ConnectTimeout, HTTPError
-import voluptuous as vol
-
-from homeassistant.const import (
-    ATTR_ATTRIBUTION,
-    CONF_PASSWORD,
-    CONF_SCAN_INTERVAL,
-    CONF_USERNAME,
-)
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.event import track_time_interval
-from homeassistant.helpers.update_coordinator import (
-    DataUpdateCoordinator,
-    UpdateFailed,
-    CoordinatorEntity,
-)
-
-from .const import (
-    ALLOWED_WATERING_TIME,
-    ATTRIBUTION,
-    CONF_WATERING_TIME,
-    NOTIFICATION_ID,
-    NOTIFICATION_TITLE,
-    DOMAIN,
-    DEFAULT_WATERING_TIME,
-    KEY_MAP,
-    ICON_MAP,
-    UNIT_OF_MEASUREMENT_MAP,
-    BINARY_SENSORS,
-    SENSORS,
-    SWITCHES,
-    RAIN_DELAY_DAYS_ATTR,
-    RAIN_DELAY_SERVICE_ATTR,
-    SCAN_INTERVAL,
-    SIGNAL_UPDATE_RAINCLOUD,
-)
+from .const import DOMAIN, RAIN_DELAY_DAYS_ATTR, RAIN_DELAY_SERVICE_ATTR, SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
-
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Required(CONF_USERNAME): cv.string,
-                vol.Required(CONF_PASSWORD): cv.string,
-                vol.Optional(CONF_SCAN_INTERVAL, default=SCAN_INTERVAL): cv.time_period,
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
 
 PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Component setup, run import config flow for each entry in config."""
+    if DOMAIN not in config:
+        return True
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_IMPORT}, data=config[DOMAIN]
+        )
+    )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up the Melnor RainCloud component."""
     hass.data.setdefault(DOMAIN, {})
-    conf = config[DOMAIN]
-    scan_interval = conf.get(CONF_SCAN_INTERVAL)
+    raincloud = RainCloudy(
+        username=entry.data[CONF_USERNAME], password=entry.data[CONF_PASSWORD]
+    )
 
-    try:
-        raincloud = RainCloudy(
-            username=conf.get(CONF_USERNAME), password=conf.get(CONF_PASSWORD)
-        )
-        if not raincloud.is_connected:
-            raise HTTPError
-    except (ConnectTimeout, HTTPError) as ex:
-        _LOGGER.error("Unable to connect to Rain Cloud service: %s", str(ex))
-        hass.components.persistent_notification.create(
-            f"Error: {ex}<br />" "You will need to restart hass after fixing.",
-            title=NOTIFICATION_TITLE,
-            notification_id=NOTIFICATION_ID,
-        )
-        return False
-
-    def handle_rain_delay(call):
-        """Set the rain delay for all valves"""
-
-        days = call.data.get(RAIN_DELAY_DAYS_ATTR, 0)
-
-        for controller in raincloud.controllers:
-            for faucet in controller.faucets:
-                for zone in faucet.zones:
-                    zone.rain_delay = days
-
-        raincloud.update()
-        dispatcher_send(hass, SIGNAL_UPDATE_RAINCLOUD)
-
-        return True
-
-    hass.services.register(DOMAIN, RAIN_DELAY_SERVICE_ATTR, handle_rain_delay)
-
-    async def async_hub_refresh():
+    async def async_refresh() -> list[RainCloudyController]:
         """Call Raincloud hub to refresh information."""
         _LOGGER.debug("Updating RainCloud Hub component")
         # TODO: async call update
-        raincloud.update()
-        return raincloud
+        try:
+            await hass.async_add_executor_job(raincloud.update())
+        except Exception as exc:
+            raise UpdateFailed(
+                f"Update for raincloud failed with exception: {exc}"
+            ) from exc
+        return raincloud.controllers
 
     # Call the Raincloud API to refresh updates
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name="raincloud",
-        update_method=async_hub_refresh,
-        update_interval=scan_interval,
+        update_method=async_refresh,
+        update_interval=SCAN_INTERVAL,
     )
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data[DOMAIN] = {
+    async def async_handle_rain_delay(call):
+        """Set the rain delay for all valves"""
+        days = call.data.get(RAIN_DELAY_DAYS_ATTR, 0)
+
+        for controller in raincloud.controllers:
+            for faucet in controller.faucets:
+                for zone in faucet.zones:
+                    await hass.async_add_executor_job(
+                        zone._set_rain_delay(zone.id, days)
+                    )
+        await coordinator.async_request_refresh()
+        return True
+
+    await hass.services.async_register(
+        DOMAIN, RAIN_DELAY_SERVICE_ATTR, async_handle_rain_delay
+    )
+
+    hass.data[DOMAIN][entry.entry_id] = {
         "raincloud": raincloud,
         "coordinator": coordinator,
     }
-    hass.config_entries.async_setup_platforms(config, PLATFORMS)
+    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
     return True
-
-
-class RainCloudEntity(CoordinatorEntity):
-    """Entity class for RainCloud devices."""
-
-    def __init__(self, coordinator, data, sensor_type):
-        """Initialize the RainCloud entity."""
-        super().__init__(coordinator=coordinator)
-        self.data = data
-        self._sensor_type = sensor_type
-        if self.data.name is "":
-            if hasattr(self.data, "_faucet"):
-                self._attr_name = f"{self.data._faucet.id}: Zone {self.data.id} {KEY_MAP.get(self._sensor_type)}"
-            else:
-                self._attr_name = f"{self.data.id} {KEY_MAP.get(self._sensor_type)}"
-        else:
-            self._attr_name = f"{self.data.name} {KEY_MAP.get(self._sensor_type)}"
-
-        if hasattr(self.data, "_faucet"):
-            self._attr_unique_id = (
-                f"{self.data._faucet.serial}_{self._sensor_type}_{self.data.id}"
-            )
-        else:
-            self._attr_unique_id = f"{self.data.serial}_{self._sensor_type}"
-        self._attr_unit_of_measurement = UNIT_OF_MEASUREMENT_MAP.get(self._sensor_type)
-        self._attr_extra_state_attributes = {
-            ATTR_ATTRIBUTION: ATTRIBUTION,
-            "identifier": self.data.serial,
-        }
-        self._attr_icon = ICON_MAP.get(self._sensor_type)
-
-    async def async_added_to_hass(self):
-        """Register callbacks."""
-        await super().async_added_to_hass()
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, SIGNAL_UPDATE_RAINCLOUD, self._update_callback
-            )
-        )
-
-    def _update_callback(self):
-        """Call update method."""
-        self.schedule_update_ha_state(True)

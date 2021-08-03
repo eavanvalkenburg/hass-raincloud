@@ -1,94 +1,98 @@
 """Support for Melnor RainCloud sprinkler water timer."""
+from __future__ import annotations
+
 import logging
+from typing import Callable, Generator
 
-import voluptuous as vol
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from raincloudy.core import RainCloudy
 
-from homeassistant.components.switch import PLATFORM_SCHEMA, SwitchEntity
-from homeassistant.const import ATTR_ATTRIBUTION, CONF_MONITORED_CONDITIONS
-import homeassistant.helpers.config_validation as cv
-
-from .const import (
-    ALLOWED_WATERING_TIME,
-    ATTRIBUTION,
-    CONF_WATERING_TIME,
-    DOMAIN,
-    DEFAULT_WATERING_TIME,
-    SWITCHES,
-)
-from . import RainCloudEntity
+from .base_entity import RainCloudEntity
+from .const import DEFAULT_WATERING_TIME, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Optional(CONF_MONITORED_CONDITIONS, default=list(SWITCHES)): vol.All(
-            cv.ensure_list, [vol.In(SWITCHES)]
-        ),
-        vol.Optional(CONF_WATERING_TIME, default=DEFAULT_WATERING_TIME): vol.All(
-            vol.In(ALLOWED_WATERING_TIME)
-        ),
-    }
-)
 
-
-def setup_platform(hass, config, add_entities, discovery_info=None):
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: Callable[[], None]
+) -> None:
     """Set up a sensor for a raincloud device."""
-    raincloud = hass.data[DOMAIN].data
-    default_watering_timer = config.get(CONF_WATERING_TIME)
+    raincloud: RainCloudy = hass.data[DOMAIN][entry.entry_id]["raincloud"]
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
+    ]
 
-    sensors = []
-    for sensor_type in config.get(CONF_MONITORED_CONDITIONS):
-        # create a sensor for each zone managed by faucet
+    def generate_switches() -> Generator[RainCloudEntity, None, None]:
+        """Generator function for the sensors."""
         for controller in raincloud.controllers:
             for faucet in controller.faucets:
                 for zone in faucet.zones:
-                    sensors.append(RainCloudSwitch(default_watering_timer, zone, sensor_type))
+                    yield RainCloudAutoWateringSwitch(coordinator, zone)
+                    yield RainCloudManualWateringSwitch(coordinator, zone)
 
-    add_entities(sensors, True)
+    async_add_entities(generate_switches)
 
 
-class RainCloudSwitch(RainCloudEntity, SwitchEntity):
+class RainCloudAutoWateringSwitch(RainCloudEntity, SwitchEntity):
     """A switch implementation for raincloud device."""
 
-    def __init__(self, default_watering_timer, *args):
+    def __init__(self, coordinator, rc_object):
         """Initialize a switch for raincloud device."""
-        super().__init__(*args)
-        self._default_watering_timer = default_watering_timer
+        super().__init__(coordinator, rc_object, "auto_watering")
 
-    @property
-    def is_on(self):
-        """Return true if device is on."""
-        return self._state
-
-    def turn_on(self, **kwargs):
+    async def async_turn_on(self, **kwargs):
         """Turn the device on."""
-        if self._sensor_type == "manual_watering":
-            self.data.manual_watering = self._default_watering_timer
-        elif self._sensor_type == "auto_watering":
-            self.data.auto_watering = True
-        self._state = True
+        await self.hass.async_add_executor_job(
+            self.rc_object._set_auto_watering(self.rc_object.id, True)
+        )
+        self.coordinator.async_request_refresh()
 
-    def turn_off(self, **kwargs):
+    async def async_turn_off(self, **kwargs):
         """Turn the device off."""
-        if self._sensor_type == "manual_watering":
-            self.data.manual_watering = "off"
-        elif self._sensor_type == "auto_watering":
-            self.data.auto_watering = False
-        self._state = False
+        await self.hass.async_add_executor_job(
+            self.rc_object._set_auto_watering(self.rc_object.id, False)
+        )
+        self.coordinator.async_request_refresh()
 
-    def update(self):
-        """Update device state."""
-        _LOGGER.debug("Updating RainCloud switch: %s", self._name)
-        if self._sensor_type == "manual_watering":
-            self._state = bool(self.data.manual_watering)
-        elif self._sensor_type == "auto_watering":
-            self._state = self.data.auto_watering
+    @callback
+    def _state_update(self):
+        """Update the state of the entity after the coordinator finishes."""
+        _LOGGER.debug("Updating RainCloud switch: %s", self._attr_name)
+        self._attr_is_on = self.rc_object.auto_watering
 
-    @property
-    def device_state_attributes(self):
-        """Return the state attributes."""
-        return {
-            ATTR_ATTRIBUTION: ATTRIBUTION,
-            "default_manual_timer": self._default_watering_timer,
-            "identifier": self.data.serial,
-        }
+
+class RainCloudManualWateringSwitch(RainCloudEntity, SwitchEntity):
+    """A switch implementation for raincloud device."""
+
+    def __init__(self, coordinator, rc_object):
+        """Initialize a switch for raincloud device."""
+        super().__init__(coordinator, rc_object, "manual_watering")
+        self._default_watering_timer = DEFAULT_WATERING_TIME
+        self._attr_extra_state_attributes[
+            "default_manual_timer"
+        ] = self._default_watering_timer
+
+    async def async_turn_on(self, **kwargs):
+        """Turn the device on."""
+        await self.hass.async_add_executor_job(
+            self.rc_object._set_manual_watering_time(
+                self.rc_object.id, self._default_watering_timer
+            )
+        )
+        self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs):
+        """Turn the device off."""
+        await self.hass.async_add_executor_job(
+            self.rc_object._set_manual_watering_time(self.rc_object.id, "off")
+        )
+        self.coordinator.async_request_refresh()
+
+    @callback
+    def _state_update(self):
+        """Update the state of the entity after the coordinator finishes."""
+        _LOGGER.debug("Updating RainCloud switch: %s", self._attr_name)
+        self._attr_is_on = bool(self.rc_object.manual_watering)

@@ -1,72 +1,68 @@
 """Support for Melnor RainCloud sprinkler water timer."""
+from __future__ import annotations
+
 import logging
+from typing import Callable, Generator
 
 from raincloudy.core import RainCloudy
 
-import voluptuous as vol
-
 from homeassistant.components.binary_sensor import BinarySensorEntity
-from homeassistant.const import CONF_MONITORED_CONDITIONS
-import homeassistant.helpers.config_validation as cv
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import BINARY_SENSORS, DOMAIN, ICON_MAP
-from . import RainCloudEntity
+from .base_entity import RainCloudEntity
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: Callable[[], None]
+) -> None:
     """Set up a sensor for a raincloud device."""
-    raincloud: RainCloudy = hass.data[DOMAIN]["raincloud"]
-    coordinator: DataUpdateCoordinator = hass.data[DOMAIN]["coordinator"]
+    raincloud: RainCloudy = hass.data[DOMAIN][entry.entry_id]["raincloud"]
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
+    ]
 
-    sensors = []
-    for sensor_type in BINARY_SENSORS:
-        if sensor_type == "status":
-            for controller in raincloud.controllers:
-                sensors.append(
-                    RainCloudBinarySensor(coordinator, controller, sensor_type)
-                )
+    def generate_sensors() -> Generator[RainCloudEntity, None, None]:
+        """Generator function for the sensors."""
+        for controller in raincloud.controllers:
+            yield RainCloudStatus(coordinator, controller)
+            for faucet in controller.faucets:
+                yield RainCloudStatus(coordinator, faucet)
+                for zone in faucet.zones:
+                    yield RainCloudIsWatering(coordinator, zone)
 
-                for faucet in controller.faucets:
-                    sensors.append(
-                        RainCloudBinarySensor(coordinator, faucet, sensor_type)
-                    )
-
-        else:
-            # create a sensor for each zone managed by controller and faucet
-            for controller in raincloud.controllers:
-                for faucet in controller.faucets:
-                    for zone in faucet.zones:
-                        sensors.append(
-                            RainCloudBinarySensor(coordinator, zone, sensor_type)
-                        )
-
-    add_entities(sensors, True)
-    return True
+    async_add_entities(generate_sensors)
 
 
-class RainCloudBinarySensor(RainCloudEntity, BinarySensorEntity):
-    """A sensor implementation for raincloud device."""
+class RainCloudStatus(RainCloudEntity, BinarySensorEntity):
+    """A binary sensor implementation for status raincloud device."""
 
-    @property
-    def is_on(self):
-        """Return true if the binary sensor is on."""
-        return self._state
+    def __init__(self, coordinator, rc_object):
+        """Create a binary sensor for status."""
+        super().__init__(coordinator, rc_object, "status")
 
-    def update(self):
-        """Get the latest data and updates the state."""
+    @callback
+    def _state_update(self):
+        """Update the state of the entity after the coordinator finishes."""
         _LOGGER.debug("Updating RainCloud sensor: %s", self._attr_name)
-        self._state = getattr(self.data, self._sensor_type)
-        if self._sensor_type == "status":
-            self._state = self._state == "Online"
+        self._attr_is_on = self.rc_object.status == "Online"
+        self._attr_icon = "mdi:pipe" if self._attr_is_on else "mdi:pipe-disconnected"
 
-    @property
-    def icon(self):
-        """Return the icon of this device."""
-        if self._sensor_type == "is_watering":
-            return "mdi:water" if self.is_on else "mdi:water-off"
-        if self._sensor_type == "status":
-            return "mdi:pipe" if self.is_on else "mdi:pipe-disconnected"
-        return ICON_MAP.get(self._sensor_type)
+
+class RainCloudIsWatering(RainCloudEntity, BinarySensorEntity):
+    """A binary sensor implementation for is_watering raincloud device."""
+
+    def __init__(self, coordinator, rc_object):
+        """Create a binary sensor for status."""
+        super().__init__(coordinator, rc_object, "is_watering")
+
+    @callback
+    def _state_update(self):
+        """Update the state of the entity after the coordinator finishes."""
+        _LOGGER.debug("Updating RainCloud sensor: %s", self._attr_name)
+        self._attr_is_on = self.rc_object.is_watering
+        self._attr_icon = "mdi:water" if self._attr_is_on else "mdi:water-off"

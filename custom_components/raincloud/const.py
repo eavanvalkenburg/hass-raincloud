@@ -2,11 +2,7 @@
 
 from datetime import timedelta
 
-from homeassistant.const import (
-    TIME_DAYS,
-    TIME_MINUTES,
-    PERCENTAGE,
-)
+from homeassistant.const import PERCENTAGE, TIME_DAYS, TIME_MINUTES
 
 ALLOWED_WATERING_TIME = [5, 10, 15, 30, 45, 60]
 ATTRIBUTION = "Data provided by Melnor Aquatimer.com"
@@ -32,12 +28,12 @@ KEY_MAP = {
 
 ICON_MAP = {
     "auto_watering": "mdi:autorenew",
-    "battery": "",
     "is_watering": "",
+    "status": "",
+    "battery": "",
     "manual_watering": "mdi:water-pump",
     "next_cycle": "mdi:calendar-clock",
     "rain_delay": "mdi:weather-rainy",
-    "status": "",
     "watering_time": "mdi:water-pump",
 }
 
@@ -53,15 +49,11 @@ UNIT_OF_MEASUREMENT_MAP = {
 }
 
 BINARY_SENSORS = ["is_watering", "status"]
-
 SENSORS = ["battery", "next_cycle", "rain_delay", "watering_time"]
-
+ZONE_SENSORS = ["next_cycle", "rain_delay", "watering_time"]
 SWITCHES = ["auto_watering", "manual_watering"]
 
 RAIN_DELAY_SERVICE_ATTR = "rain_delay"
-
 RAIN_DELAY_DAYS_ATTR = "days"
-
 SCAN_INTERVAL = timedelta(seconds=10)
-
 SIGNAL_UPDATE_RAINCLOUD = "raincloud_update"
